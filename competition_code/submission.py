@@ -80,15 +80,26 @@ class RoarCompetitionSolution:
             self.current_waypoint_idx,
             self.maneuverable_waypoints
         )
-         # We use the 3rd waypoint ahead of the current waypoint as the target waypoint
-        waypoint_to_follow = self.maneuverable_waypoints[(self.current_waypoint_idx + 3) % len(self.maneuverable_waypoints)]
+        # Calculate dynamic lookahead based on velocity
+        lookahead_distance = int(vehicle_velocity_norm // 5)  # Example: Look ahead more as speed increases
+
+        # Ensure lookahead distance stays within reasonable bounds
+        lookahead_distance = np.clip(lookahead_distance, 10, 30)  # Example: between 1 and 10 waypoints
+
+        # Adjust target waypoint based on current velocity
+        waypoint_to_follow = self.maneuverable_waypoints[(self.current_waypoint_idx + lookahead_distance) % len(self.maneuverable_waypoints)]
+        curve_ahead = self.maneuverable_waypoints[(self.current_waypoint_idx + 70) % len(self.maneuverable_waypoints)]
 
         # Calculate delta vector towards the target waypoint
         vector_to_waypoint = (waypoint_to_follow.location - vehicle_location)[:2]
         heading_to_waypoint = np.arctan2(vector_to_waypoint[1],vector_to_waypoint[0])
 
+        curve_vector_to_waypoint = (curve_ahead.location - vehicle_location)[:2]
+        curve_heading_to_waypoint = np.arctan2(curve_vector_to_waypoint[1],curve_vector_to_waypoint[0])
+
         # Calculate delta angle towards the target waypoint
         delta_heading = normalize_rad(heading_to_waypoint - vehicle_rotation[2])
+        curve_delta_heading = normalize_rad(curve_heading_to_waypoint - vehicle_rotation[2])
 
         # Proportional controller to steer the vehicle towards the target waypoint
         steer_control = (
@@ -97,7 +108,26 @@ class RoarCompetitionSolution:
         steer_control = np.clip(steer_control, -1.0, 1.0)
 
         # Proportional controller to control the vehicle's speed towards 40 m/s
-        throttle_control = 0.05 * (20 - vehicle_velocity_norm)
+        throttle_control = 0.05 * (85 - vehicle_velocity_norm)
+
+        curvature = np.pi - delta_heading
+        curve_ahead_curvature = np.pi - curve_delta_heading
+
+        print("curvature", curvature, "speed:", vehicle_velocity_norm)
+        print("throttle:", throttle_control)
+
+        # If the curvature is high, slow down; if it's low, speed up
+        if 2700 > self.current_waypoint_idx > 2660:
+            throttle_control = min(0.0, throttle_control - 0.05)
+        else:
+            if curvature > np.pi / 4:  # Example threshold for turns
+                throttle_control = max(0.0, throttle_control - 1)  # Reduce throttle
+            elif np.pi/6 < curvature < np.pi / 4:
+                throttle_control = max(0.0, throttle_control + 1)
+            elif 0 == curvature or 0 < curvature < np.pi/6:
+                throttle_control = 1
+            if curve_ahead_curvature > np.pi / 3:
+                throttle_control = max(0.0, throttle_control - 1)
 
         control = {
             "throttle": np.clip(throttle_control, 0.0, 1.0),
